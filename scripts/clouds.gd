@@ -4,7 +4,13 @@ extends Node3D
 @export var sun_dir := Vector3(0.12, 0.88, 0.46)
 
 
-func build() -> void:
+## kind: cumulus（入道雲） / cumulus_low（低めの雲） / dusk（夕焼けの雲） / none
+func build(kind := "cumulus") -> void:
+	for c in get_children():
+		remove_child(c)
+		c.queue_free()
+	if kind == "none":
+		return
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 808
 	var sphere := SphereMesh.new()
@@ -23,6 +29,11 @@ func build() -> void:
 		[-110.0, 2700.0, 0.9, 260.0, 1250.0],
 		[160.0, 3000.0, 0.6, 300.0, 700.0],
 	]
+	if kind == "cumulus_low":
+		clouds = [[-20.0, 2600.0, 0.75, 240.0, 900.0], [30.0, 2800.0, 0.7, 260.0, 800.0], [120.0, 2700.0, 0.8, 250.0, 1000.0],
+			[-100.0, 2600.0, 0.7, 240.0, 850.0], [70.0, 3000.0, 0.6, 250.0, 700.0], [-150.0, 3000.0, 0.7, 250.0, 800.0]]
+	elif kind == "dusk":
+		clouds = [[-60.0, 2600.0, 0.8, 300.0, 900.0], [15.0, 3000.0, 0.7, 320.0, 800.0], [110.0, 2800.0, 0.9, 300.0, 1100.0]]
 	for c in clouds:
 		var az := deg_to_rad(c[0])
 		var center: Vector3 = Vector3(sin(az), 0, -cos(az)) * float(c[1])
@@ -64,6 +75,11 @@ func build() -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/cloud.gdshader")
 	mat.set_shader_parameter("sun_dir", sun_dir)
+	if kind == "dusk":
+		mat.set_shader_parameter("lit_color", Color(1.0, 0.62, 0.38))
+		mat.set_shader_parameter("shade_color", Color(0.3, 0.25, 0.42))
+		mat.set_shader_parameter("horizon_color", Color(0.95, 0.56, 0.32))
+		mat.set_shader_parameter("brightness", 1.05)
 	var mmi := MultiMeshInstance3D.new()
 	mmi.name = "Cumulonimbus"
 	mmi.multimesh = mm

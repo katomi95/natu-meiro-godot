@@ -12,7 +12,7 @@ uniform float brightness = 1.35;
 varying vec3 wpos;
 varying float v_base;
 
-float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float hash3(vec3 p) { vec3 p3 = fract(p * 0.1031); p3 += dot(p3, p3.zyx + 31.32); return fract((p3.x + p3.y) * p3.z); }
 float noise3(vec3 p) {
 	vec3 i = floor(p); vec3 f = fract(p);
 	vec3 u = f * f * (3.0 - 2.0 * f);

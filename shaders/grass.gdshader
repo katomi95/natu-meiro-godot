@@ -5,6 +5,7 @@ uniform vec2 wind_dir = vec2(0.85, 0.52);
 uniform vec3 base_color : source_color = vec3(0.14, 0.30, 0.05);
 uniform vec3 tip_color : source_color = vec3(0.62, 0.78, 0.22);
 uniform vec3 dry_color : source_color = vec3(0.78, 0.72, 0.36);
+uniform float sway_amp = 1.0;
 
 varying float v_t;
 varying float v_var;
@@ -14,7 +15,7 @@ void vertex() {
 	float phase = INSTANCE_CUSTOM.r * 6.2831;
 	float gust = sin(dot(VERTEX.xz, wind_dir) * 0.22 - TIME * 1.4) * 0.5 + 0.5;
 	float flutter = sin(TIME * 3.3 + phase + VERTEX.x * 2.0) * 0.5;
-	vec2 off = wind_dir * (gust * 0.16 + flutter * 0.05) * t * t;
+	vec2 off = wind_dir * (gust * 0.16 + flutter * 0.05) * t * t * sway_amp;
 	VERTEX.xz += off;
 	VERTEX.y -= dot(off, off) * 1.2;
 	v_t = t;

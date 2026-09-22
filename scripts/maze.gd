@@ -1,44 +1,74 @@
 extends Node3D
-## ひまわり迷路：迷路生成・ひまわり/草の MultiMesh 配置・当たり判定・見晴らし台・遠景。
+## 迷路：生成・スタイル別の壁（ひまわり / 夏草 / 夏祭り / 町）・地面・当たり判定・見晴らし台・遠景。
+## build(cfg) を呼ぶたびに作り直す。
 
 const TILE := 2.6
-const CELLS := 9
-const G := CELLS * 2 + 1          # タイル数（壁込み）
-const FIELD_MARGIN := 26.0        # 迷路の外に広がるひまわり畑の幅
+const FIELD_MARGIN := 26.0        # 迷路の外に広がる畑の幅
 const DECK_H := 1.9               # 見晴らし台の高さ
 const RAMP_LEN := 7.0
 
-@export var sun_dir := Vector3(0.12, 0.88, 0.46)
-
+var cfg: Dictionary = {}
+var cells := 9
+var G := 19
+var sun_dir := Vector3(0.12, 0.88, 0.46)
 var wall := []                    # wall[x][z] : bool
 var young := {}                   # 背の低いひまわり（向こうが見える）タイル
-var start_tile := Vector2i(1, G - 2)
-var entrance_tile := Vector2i(1, G - 1)
+var start_tile := Vector2i(1, 17)
+var entrance_tile := Vector2i(1, 18)
 var goal_tile := Vector2i.ZERO
 var path_tiles: Array[Vector2i] = []
 var deck_center := Vector3.ZERO
+var has_deck := false
 var rng := RandomNumberGenerator.new()
 ## Web(WebGL2)版は密度を落として軽くする
 var lite := OS.has_feature("web")
 
 var plant_mat: ShaderMaterial
 var grass_mat: ShaderMaterial
+var tall_mat: ShaderMaterial
+var lantern_lights: Array[OmniLight3D] = []
 
 
-func build() -> void:
-	rng.seed = 20260801
+func build(cfg_: Dictionary) -> void:
+	cfg = cfg_
+	for c in get_children():
+		remove_child(c)
+		c.queue_free()
+	lantern_lights.clear()
+	young.clear()
+	cells = cfg.cells
+	G = cells * 2 + 1
+	start_tile = Vector2i(1, G - 2)
+	entrance_tile = Vector2i(1, G - 1)
+	has_deck = cfg.get("deck", false)
+	sun_dir = (cfg.sun_dir as Vector3).normalized()
+	rng.seed = cfg.seed
 	_generate_maze()
 	plant_mat = ShaderMaterial.new()
 	plant_mat.shader = load("res://shaders/plant.gdshader")
+	plant_mat.set_shader_parameter("wind_strength", cfg.wind)
 	grass_mat = ShaderMaterial.new()
 	grass_mat.shader = load("res://shaders/grass.gdshader")
+	if cfg.get("fade", false):
+		grass_mat.set_shader_parameter("tip_color", Color(0.72, 0.7, 0.36))
+		grass_mat.set_shader_parameter("base_color", Color(0.26, 0.3, 0.1))
 	var e := tile_to_world(entrance_tile)
 	deck_center = Vector3(e.x, DECK_H, e.z + TILE * 0.5 + RAMP_LEN + 2.0)
 	_build_ground()
-	_build_sunflowers()
-	_build_grass()
+	match cfg.style:
+		"sunflower":
+			_build_sunflowers()
+			_build_grass()
+		"grass":
+			_build_tall_grass()
+			_build_grass()
+		"festival":
+			_build_festival()
+		"town":
+			_build_town()
 	_build_collision()
-	_build_deck()
+	if has_deck:
+		_build_deck()
 	_build_distance()
 
 
@@ -62,6 +92,14 @@ func is_open(t: Vector2i) -> bool:
 	return t.x >= 0 and t.y >= 0 and t.x < G and t.y < G and not wall[t.x][t.y]
 
 
+func _open_neighbors(t: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if is_open(t + d):
+			out.append(d)
+	return out
+
+
 func _generate_maze() -> void:
 	wall = []
 	for x in G:
@@ -70,8 +108,8 @@ func _generate_maze() -> void:
 			col.append(true)
 		wall.append(col)
 	# 穴掘り法
-	var stack: Array[Vector2i] = [Vector2i(0, CELLS - 1)]
-	var visited := {Vector2i(0, CELLS - 1): true}
+	var stack: Array[Vector2i] = [Vector2i(0, cells - 1)]
+	var visited := {Vector2i(0, cells - 1): true}
 	wall[1][G - 2] = false
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 	while not stack.is_empty():
@@ -79,7 +117,7 @@ func _generate_maze() -> void:
 		var opts: Array[Vector2i] = []
 		for d in dirs:
 			var n: Vector2i = c + d
-			if n.x >= 0 and n.y >= 0 and n.x < CELLS and n.y < CELLS and not visited.has(n):
+			if n.x >= 0 and n.y >= 0 and n.x < cells and n.y < cells and not visited.has(n):
 				opts.append(n)
 		if opts.is_empty():
 			stack.pop_back()
@@ -89,9 +127,12 @@ func _generate_maze() -> void:
 		wall[n2.x * 2 + 1][n2.y * 2 + 1] = false
 		wall[c.x + n2.x + 1][c.y + n2.y + 1] = false
 		stack.append(n2)
-	# ループを少し作って迷いすぎないように
+	# ループを作って迷いすぎないように（braid）
+	var loops: int = cfg.get("loops", 4)
 	var opened := 0
-	while opened < 7:
+	var guard := 0
+	while opened < loops and guard < 5000:
+		guard += 1
 		var x := rng.randi_range(1, G - 2)
 		var z := rng.randi_range(1, G - 2)
 		if not wall[x][z]:
@@ -100,14 +141,16 @@ func _generate_maze() -> void:
 				(x % 2 == 0 and z % 2 == 1 and not wall[x - 1][z] and not wall[x + 1][z]):
 			wall[x][z] = false
 			opened += 1
-	wall[entrance_tile.x][entrance_tile.y] = false
-	# ゴール = 入口から遠いセル。周囲を広場にしても近道ができないものを選ぶ
+	if has_deck:
+		wall[entrance_tile.x][entrance_tile.y] = false
+	# 出口：経路長が path_len に近く、周囲を広場にしても近道ができないセル
 	var dist := _bfs(start_tile)
+	var target: int = cfg.path_len
 	var cands: Array = []
 	for k in dist.keys():
 		if k.x % 2 == 1 and k.y % 2 == 1 and k.x >= 3 and k.y >= 3 and k.x <= G - 4 and k.y <= G - 4:
 			cands.append(k)
-	cands.sort_custom(func(a, b): return dist[a] > dist[b])
+	cands.sort_custom(func(a, b): return absi(dist[a] - target) < absi(dist[b] - target))
 	var saved := wall.duplicate(true)
 	for k in cands:
 		wall = saved.duplicate(true)
@@ -119,8 +162,7 @@ func _generate_maze() -> void:
 			goal_tile = k
 			path_tiles = p
 			break
-	print("maze goal=%s path_len=%d" % [goal_tile, path_tiles.size()])
-	# 通路に面した壁の一部を「若いひまわり」にして、ときどき向こうが見えるように
+	print("maze %s goal=%s path_len=%d" % [cfg.name, goal_tile, path_tiles.size()])
 	for x in range(1, G - 1):
 		for z in range(1, G - 1):
 			if wall[x][z] and rng.randf() < 0.07:
@@ -194,148 +236,26 @@ func maze_half() -> float:
 	return G * TILE * 0.5
 
 
-# ---------------------------------------------------------------- ひまわりのメッシュ
-
-func _v(st: SurfaceTool, p: Vector3, n: Vector3, c: Color, u: float) -> void:
-	st.set_color(c)
-	st.set_normal(n)
-	st.set_uv(Vector2(u, 0.0))
-	st.add_vertex(p)
+## 迷路の外側（パディング）かどうか
+func _outside(p: Vector3) -> bool:
+	var hm := maze_half()
+	return absf(p.x) >= hm or absf(p.z) >= hm
 
 
-func build_sunflower_mesh(detail: bool, H := 2.5) -> ArrayMesh:
-	var r := RandomNumberGenerator.new()
-	r.seed = 7 if detail else 11
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var stem_c := Color(0.36, 0.45, 0.07, 0.0)
-	var segs := 8 if detail else 4
-	var sides := 6 if detail else 4
-	var stem_pt := func(t: float) -> Vector3: return Vector3(0.0, t * H, 0.10 * pow(t, 4.0))
-	# 茎
-	for i in segs:
-		var t0 := float(i) / segs
-		var t1 := float(i + 1) / segs
-		var p0: Vector3 = stem_pt.call(t0)
-		var p1: Vector3 = stem_pt.call(t1)
-		var r0 := lerpf(0.034, 0.018, t0)
-		var r1 := lerpf(0.034, 0.018, t1)
-		for s in sides:
-			var a0 := TAU * s / sides
-			var a1 := TAU * (s + 1) / sides
-			var n0 := Vector3(cos(a0), 0, sin(a0))
-			var n1 := Vector3(cos(a1), 0, sin(a1))
-			_v(st, p0 + n0 * r0, n0, stem_c, 0.0)
-			_v(st, p1 + n0 * r1, n0, stem_c, 0.0)
-			_v(st, p1 + n1 * r1, n1, stem_c, 0.0)
-			_v(st, p0 + n0 * r0, n0, stem_c, 0.0)
-			_v(st, p1 + n1 * r1, n1, stem_c, 0.0)
-			_v(st, p0 + n1 * r0, n1, stem_c, 0.0)
-	# 葉（ハート形、付け根から上に出て垂れ下がる）
-	var nl := 8 if detail else 4
-	var lsteps := 6 if detail else 3
-	for k in nl:
-		var f := float(k) / (nl - 1)
-		var h := lerpf(0.42, 0.86, f) * H
-		var yaw := k * 2.4 + r.randf_range(-0.3, 0.3)
-		var L := lerpf(0.46, 0.26, f) * r.randf_range(0.85, 1.15)
-		var dir := Vector3(cos(yaw), 0, sin(yaw))
-		var side := Vector3(-sin(yaw), 0, cos(yaw))
-		var base: Vector3 = stem_pt.call(h / H) + dir * 0.02
-		var lc := Color(0.16, 0.36, 0.04, 0.5).lerp(Color(0.36, 0.42, 0.06, 0.5), (1.0 - f) * 0.5 * r.randf())
-		var up_n := (Vector3.UP * 1.0 + dir * 0.25).normalized()
-		var prev := []
-		for j in lsteps + 1:
-			var t := float(j) / lsteps
-			var c := base + dir * (0.05 + t * L) + Vector3.UP * (t * 0.28 * L - t * t * 0.62 * L)
-			var w := L * 0.46 * sin(PI * pow(t, 0.7)) if j < lsteps else 0.0
-			var le := c + side * w - Vector3.UP * w * 0.28
-			var ri := c - side * w - Vector3.UP * w * 0.28
-			var cur := [c, le, ri, t]
-			if j > 0:
-				var c0: Vector3 = prev[0]; var l0: Vector3 = prev[1]; var r0v: Vector3 = prev[2]; var u0: float = prev[3]
-				var nL := (up_n + side * 0.35).normalized()
-				var nR := (up_n - side * 0.35).normalized()
-				_v(st, c0, up_n, lc, u0); _v(st, l0, nL, lc, u0); _v(st, c, up_n, lc, t)
-				_v(st, l0, nL, lc, u0); _v(st, le, nL, lc, t); _v(st, c, up_n, lc, t)
-				_v(st, c0, up_n, lc, u0); _v(st, c, up_n, lc, t); _v(st, r0v, nR, lc, u0)
-				_v(st, r0v, nR, lc, u0); _v(st, c, up_n, lc, t); _v(st, ri, nR, lc, t)
-			prev = cur
-	# 花：太陽の方(+Z)へ、やや上向き
-	var top: Vector3 = stem_pt.call(1.0)
-	var n := Vector3(0, 0.38, 1).normalized()
-	var rt := Vector3.RIGHT
-	var up := n.cross(rt).normalized()
-	rt = up.cross(n).normalized()
-	var C := top + n * 0.03
-	var Rd := 0.14
-	var dseg := 16 if detail else 8
-	# 花芯（ドーム）
-	var rings := 3 if detail else 1
-	for i in rings:
-		var a0 := float(i) / rings
-		var a1 := float(i + 1) / rings
-		var col0 := Color(0.30, 0.22, 0.05, 0.0).lerp(Color(0.20, 0.10, 0.02, 0.0), a0)
-		var col1 := Color(0.30, 0.22, 0.05, 0.0).lerp(Color(0.20, 0.10, 0.02, 0.0), a1)
-		for s in dseg:
-			var t0 := TAU * s / dseg
-			var t1 := TAU * (s + 1) / dseg
-			var d0 := rt * cos(t0) + up * sin(t0)
-			var d1 := rt * cos(t1) + up * sin(t1)
-			var q00 := C + d0 * Rd * a0 + n * 0.035 * (1.0 - a0 * a0)
-			var q01 := C + d1 * Rd * a0 + n * 0.035 * (1.0 - a0 * a0)
-			var q10 := C + d0 * Rd * a1 + n * 0.035 * (1.0 - a1 * a1)
-			var q11 := C + d1 * Rd * a1 + n * 0.035 * (1.0 - a1 * a1)
-			var nn0 := (n + d0 * a1 * 0.5).normalized()
-			var nn1 := (n + d1 * a1 * 0.5).normalized()
-			_v(st, q00, n, col0, 0.0); _v(st, q10, nn0, col1, 0.0); _v(st, q11, nn1, col1, 0.0)
-			if i > 0:
-				_v(st, q00, n, col0, 0.0); _v(st, q11, nn1, col1, 0.0); _v(st, q01, n, col0, 0.0)
-	# がく（裏側）
-	var back_c := Color(0.22, 0.40, 0.08, 0.0)
-	var apex := C - n * 0.09
-	for s in dseg:
-		var t0 := TAU * s / dseg
-		var t1 := TAU * (s + 1) / dseg
-		var d0 := rt * cos(t0) + up * sin(t0)
-		var d1 := rt * cos(t1) + up * sin(t1)
-		_v(st, C + d0 * Rd * 1.08, (d0 * 0.5 - n).normalized(), back_c, 0.0)
-		_v(st, apex, -n, back_c, 0.0)
-		_v(st, C + d1 * Rd * 1.08, (d1 * 0.5 - n).normalized(), back_c, 0.0)
-	# 花びら（二重）
-	var layers := 2 if detail else 1
-	var np := 20 if detail else 14
-	for l in layers:
-		for i in np:
-			var a := (i + 0.5 * l) / np * TAU + r.randf_range(-0.06, 0.06)
-			var d := rt * cos(a) + up * sin(a)
-			var pp := n.cross(d).normalized()
-			var plen := r.randf_range(0.11, 0.16)
-			var w := r.randf_range(0.026, 0.034)
-			var base := C + d * Rd * 0.85 - n * (0.01 + 0.012 * l)
-			var mid := C + d * (Rd + plen * 0.45) - n * (0.012 + 0.014 * l)
-			var tip := C + d * (Rd + plen) - n * (0.035 + 0.03 * l) + pp * r.randf_range(-0.01, 0.01)
-			var pc := Color(0.98, 0.64, 0.0, 1.0).lerp(Color(0.95, 0.46, 0.0, 1.0), 0.35 * l + r.randf() * 0.25)
-			var pn := (n + d * 0.15).normalized()
-			_v(st, base, pn, pc, 0.0); _v(st, mid + pp * w, pn, pc, 0.0); _v(st, mid - pp * w, pn, pc, 0.0)
-			_v(st, mid + pp * w, pn, pc, 0.0); _v(st, tip, pn, pc, 0.0); _v(st, mid - pp * w, pn, pc, 0.0)
-	return st.commit()
+# ---------------------------------------------------------------- MultiMesh
 
-
-# ---------------------------------------------------------------- 配置
-
-func _make_mm(mesh: Mesh, xforms: Array, customs: Array, mat: Material, shadows: bool, name_: String) -> MultiMeshInstance3D:
+func _make_mm(mesh: Mesh, xforms: Array, customs: Array, mat: Material, shadows: bool, name_: String, colors := []) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_custom_data = true
-	# Compatibilityレンダラーでは COLOR にインスタンス色が掛かるので白を明示する
+	# Compatibilityレンダラーでは COLOR にインスタンス色が掛かるので明示する
 	mm.use_colors = true
 	mm.mesh = mesh
 	mm.instance_count = xforms.size()
 	for i in xforms.size():
 		mm.set_instance_transform(i, xforms[i])
-		mm.set_instance_custom_data(i, customs[i])
-		mm.set_instance_color(i, Color.WHITE)
+		mm.set_instance_custom_data(i, customs[i] if i < customs.size() else Color(0, 0, 0, 0))
+		mm.set_instance_color(i, colors[i] if i < colors.size() else Color.WHITE)
 	var mmi := MultiMeshInstance3D.new()
 	mmi.name = name_
 	mmi.multimesh = mm
@@ -345,44 +265,53 @@ func _make_mm(mesh: Mesh, xforms: Array, customs: Array, mat: Material, shadows:
 	return mmi
 
 
+func _rc() -> Color:
+	return Color(rng.randf(), rng.randf(), 0, 0)
+
+
+# ---------------------------------------------------------------- ひまわり
+
 func _flower_xform(pos: Vector3, s: float, face_sun: bool) -> Transform3D:
 	var sh := Vector2(sun_dir.x, sun_dir.z).normalized()
 	var yaw := atan2(sh.x, sh.y)
-	if face_sun:
+	if cfg.get("droop", false):
+		yaw = 0.6 + rng.randf_range(-0.75, 0.75)
+	elif face_sun:
 		yaw += rng.randf_range(-0.55, 0.55)
 	else:
 		yaw = rng.randf() * TAU
 	var b := Basis(Vector3.UP, yaw).scaled(Vector3(s * rng.randf_range(0.9, 1.1), s, s * rng.randf_range(0.9, 1.1)))
-	# ほんの少し傾ける
 	b = Basis(Vector3(1, 0, 0), rng.randf_range(-0.06, 0.06)) * b
 	return Transform3D(b, pos)
 
 
 func _build_sunflowers() -> void:
-	var near_mesh := build_sunflower_mesh(true)
-	var far_mesh := build_sunflower_mesh(false)
+	var droop: bool = cfg.get("droop", false)
+	var fade: bool = cfg.get("fade", false)
+	var near_mesh := Props.sunflower(true, droop, fade)
+	var far_mesh := Props.sunflower(false, droop, fade)
 	var near_x := []
 	var near_c := []
 	var far_x := []
 	var far_c := []
 	var hm := maze_half()
-	# 迷路の壁
 	for x in G:
 		for z in G:
 			if not wall[x][z]:
 				continue
 			var t := Vector2i(x, z)
 			var c := tile_to_world(t)
-			var is_young := young.has(t)
+			var is_young := young.has(t) and not fade
 			var n := 4 if not is_young else 3
 			for i in n:
 				for j in n:
+					if fade and rng.randf() < 0.12:
+						continue
 					var p := c + Vector3((i + 0.5) / n - 0.5, 0, (j + 0.5) / n - 0.5) * (TILE - 0.35)
 					p += Vector3(rng.randf_range(-0.2, 0.2), 0, rng.randf_range(-0.2, 0.2))
 					var s := rng.randf_range(0.88, 1.22) if not is_young else rng.randf_range(0.5, 0.62)
 					near_x.append(_flower_xform(p, s, rng.randf() < 0.9))
-					near_c.append(Color(rng.randf(), rng.randf(), 0, 0))
-	# 迷路の外の畑（見晴らし台から見える海）
+					near_c.append(_rc())
 	var outer := hm + FIELD_MARGIN
 	var e := tile_to_world(entrance_tile)
 	var step := 1.35 if lite else 0.95
@@ -394,114 +323,335 @@ func _build_sunflowers() -> void:
 			gz += step
 			if absf(p.x) < hm and absf(p.z) < hm:
 				continue
-			# 見晴らし台と坂道の場所は空ける
-			if absf(p.x - e.x) < 3.2 and p.z > hm - 0.5 and p.z < deck_center.z + 3.5:
+			if has_deck and absf(p.x - e.x) < 3.2 and p.z > hm - 0.5 and p.z < deck_center.z + 3.5:
 				continue
-			# 外周は円形に（四角い縁を見せない）
 			var rr := Vector2(p.x, p.z).length()
 			if rr > outer - rng.randf() * 8.0:
 				continue
 			var s := rng.randf_range(0.85, 1.2)
-			if Vector2(p.x, p.z).length() < hm + 8.0:
+			if rr < hm + 8.0:
 				near_x.append(_flower_xform(p, s, rng.randf() < 0.9))
-				near_c.append(Color(rng.randf(), rng.randf(), 0, 0))
+				near_c.append(_rc())
 			else:
 				far_x.append(_flower_xform(p, s, rng.randf() < 0.9))
-				far_c.append(Color(rng.randf(), rng.randf(), 0, 0))
+				far_c.append(_rc())
 		gx += step
 	_make_mm(near_mesh, near_x, near_c, plant_mat, true, "SunflowersNear")
 	_make_mm(far_mesh, far_x, far_c, plant_mat, false, "SunflowersFar")
 	print("sunflowers near=%d far=%d" % [near_x.size(), far_x.size()])
 
 
-func build_grass_mesh() -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var r := RandomNumberGenerator.new()
-	r.seed = 3
-	for b in 7:
-		var a := r.randf() * TAU
-		var o := Vector3(cos(a), 0, sin(a)) * r.randf_range(0.0, 0.14)
-		var face := r.randf() * TAU
-		var side := Vector3(cos(face), 0, sin(face))
-		var lean := Vector3(-sin(face), 0, cos(face)) * r.randf_range(-0.12, 0.12) + Vector3(r.randf_range(-0.06, 0.06), 0, r.randf_range(-0.06, 0.06))
-		var h := r.randf_range(0.28, 0.6)
-		var w := r.randf_range(0.018, 0.03)
-		var nrm := side.cross(Vector3.UP).normalized()
-		var segs := 3
-		for s in segs:
-			var t0 := float(s) / segs
-			var t1 := float(s + 1) / segs
-			var p0 := o + Vector3.UP * h * t0 + lean * t0 * t0
-			var p1 := o + Vector3.UP * h * t1 + lean * t1 * t1
-			var w0 := w * (1.0 - t0)
-			var w1 := w * (1.0 - t1)
-			st.set_normal(nrm); st.set_uv(Vector2(0, t0)); st.add_vertex(p0 - side * w0)
-			st.set_normal(nrm); st.set_uv(Vector2(0, t0)); st.add_vertex(p0 + side * w0)
-			st.set_normal(nrm); st.set_uv(Vector2(0, t1)); st.add_vertex(p1 + side * w1)
-			if s < segs - 1:
-				st.set_normal(nrm); st.set_uv(Vector2(0, t0)); st.add_vertex(p0 - side * w0)
-				st.set_normal(nrm); st.set_uv(Vector2(0, t1)); st.add_vertex(p1 + side * w1)
-				st.set_normal(nrm); st.set_uv(Vector2(0, t1)); st.add_vertex(p1 - side * w1)
-	return st.commit()
-
+# ---------------------------------------------------------------- 草
 
 func _build_grass() -> void:
-	var mesh := build_grass_mesh()
+	var mesh := Props.grass_clump(false)
 	var xs := []
 	var cs := []
 	var hm := maze_half()
 	var ext := hm + 4.0
-	var n := 0
 	var gstep := 0.46 if lite else 0.36
+	var e := tile_to_world(entrance_tile)
 	var x := -ext
 	while x < ext:
 		var z := -ext
-		while z < ext + RAMP_LEN + 6.0:
+		while z < ext + (RAMP_LEN + 6.0 if has_deck else 0.0):
 			var p := Vector3(x + rng.randf_range(-0.2, 0.2), 0, z + rng.randf_range(-0.2, 0.2))
 			z += gstep
 			var inside := absf(p.x) < hm and absf(p.z) < hm
-			if not inside and z > ext:
-				# 見晴らし台周辺だけ
-				var e := tile_to_world(entrance_tile)
-				if absf(p.x - e.x) > 4.0:
-					continue
+			if not inside and z > ext and absf(p.x - e.x) > 4.0:
+				continue
 			var keep := 1.0
 			if inside and is_open(world_to_tile(p)):
-				var d := path_center_dist(p)
-				keep = smoothstep(0.25, 0.85, d) * 0.9 + 0.1
+				keep = smoothstep(0.25, 0.85, path_center_dist(p)) * 0.9 + 0.1
 			elif inside:
 				keep = 0.55
 			if rng.randf() > keep:
 				continue
 			var s := rng.randf_range(0.7, 1.3) * (1.0 if keep > 0.5 else 0.75)
-			var b := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * rng.randf_range(0.8, 1.3), s))
-			xs.append(Transform3D(b, p))
-			cs.append(Color(rng.randf(), rng.randf(), 0, 0))
-			n += 1
+			xs.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * rng.randf_range(0.8, 1.3), s)), p))
+			cs.append(_rc())
 		x += gstep
 	var mmi := _make_mm(mesh, xs, cs, grass_mat, false, "Grass")
 	mmi.visibility_range_end = 70.0
-	print("grass clumps=%d" % n)
+	print("grass clumps=%d" % xs.size())
 
+
+## 夏草：背丈より高い草の壁
+func _build_tall_grass() -> void:
+	tall_mat = ShaderMaterial.new()
+	tall_mat.shader = load("res://shaders/grass.gdshader")
+	tall_mat.set_shader_parameter("sway_amp", 4.5)
+	tall_mat.set_shader_parameter("base_color", Color(0.1, 0.24, 0.04))
+	tall_mat.set_shader_parameter("tip_color", Color(0.55, 0.72, 0.2))
+	var meshes := [Props.grass_clump(true, 11), Props.grass_clump(true, 12), Props.grass_clump(true, 13)]
+	var sets := [[], [], []]
+	var customs := [[], [], []]
+	var hm := maze_half()
+	var outer := hm + 14.0
+	var step := TILE / (3.0 if not lite else 2.4)
+	var gx := -outer
+	while gx < outer:
+		var gz := -outer
+		while gz < outer:
+			var p := Vector3(gx + rng.randf_range(-0.35, 0.35), 0, gz + rng.randf_range(-0.35, 0.35))
+			gz += step
+			var inside := absf(p.x) < hm and absf(p.z) < hm
+			if inside:
+				var t := world_to_tile(p)
+				if not is_wall(t):
+					continue
+				# 通路側に少しはみ出してもよいが、中央へは出ない
+				var c := tile_to_world(t)
+				p = c + (p - c) * 0.85
+			elif Vector2(p.x, p.z).length() > outer - rng.randf() * 6.0:
+				continue
+			var s := rng.randf_range(0.85, 1.25)
+			var k := rng.randi() % 3
+			sets[k].append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(s, s * rng.randf_range(0.85, 1.15), s)), p))
+			customs[k].append(_rc())
+		gx += step
+	for k in 3:
+		_make_mm(meshes[k], sets[k], customs[k], tall_mat, true, "TallGrass%d" % k)
+
+
+# ---------------------------------------------------------------- 夏祭り
+
+func _face_open(t: Vector2i) -> float:
+	## 隣の通路の方を向く yaw（正面 -Z が通路を向く）
+	var ns := _open_neighbors(t)
+	if ns.is_empty():
+		return float(rng.randi() % 4) * PI * 0.5
+	var d: Vector2i = ns[rng.randi() % ns.size()]
+	return atan2(-float(d.x), -float(d.y))
+
+
+func _build_festival() -> void:
+	var roof_cols := [Color(0.85, 0.12, 0.1), Color(0.15, 0.3, 0.75), Color(0.95, 0.5, 0.1)]
+	var goods_cols := [Color(1, 0.3, 0.4), Color(0.2, 0.6, 1.0), Color(1, 0.85, 0.2)]
+	var stall_sets := [[], [], []]
+	var people := []
+	var people_c := []
+	var people_col := []
+	var lanterns := []
+	var lantern_col := []
+	var yukata := [Color(0.18, 0.22, 0.5), Color(0.85, 0.35, 0.45), Color(0.95, 0.9, 0.85), Color(0.3, 0.5, 0.75),
+		Color(0.5, 0.25, 0.55), Color(0.9, 0.55, 0.2), Color(0.2, 0.45, 0.35), Color(0.75, 0.2, 0.2),
+		Color(0.95, 0.75, 0.8), Color(0.25, 0.25, 0.3), Color(0.55, 0.75, 0.85), Color(0.9, 0.85, 0.5)]
+	var pad := 3
+	var idx := 0
+	for x in range(-pad, G + pad):
+		for z in range(-pad, G + pad):
+			var t := Vector2i(x, z)
+			var inside := x >= 0 and z >= 0 and x < G and z < G
+			if inside and not wall[x][z]:
+				continue
+			var c := tile_to_world(t)
+			idx += 1
+			var yaw := _face_open(t) if inside else float(rng.randi() % 4) * PI * 0.5
+			if idx % 3 == 0 or (not inside and rng.randf() < 0.5):
+				var s := 1.05 + rng.randf() * 0.1
+				var k := rng.randi() % 3
+				stall_sets[k].append(Transform3D(Basis(Vector3.UP, yaw).scaled(Vector3(s, s * 1.1, s)), c))
+			else:
+				var n := 2 if inside else 1
+				for i in n:
+					var p := c + Vector3(rng.randf_range(-0.8, 0.8), 0, rng.randf_range(-0.8, 0.8))
+					var s := rng.randf_range(1.1, 1.3)
+					people.append(Transform3D(Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s), p))
+					people_c.append(_rc())
+					people_col.append(yukata[rng.randi() % yukata.size()])
+			# 提灯（通路に面した壁の上）
+			if inside and rng.randf() < 0.7 and not _open_neighbors(t).is_empty():
+				var d: Vector2i = _open_neighbors(t)[0]
+				var lp := c + Vector3(d.x, 0, d.y) * TILE * 0.42 + Vector3(0, 2.95 + rng.randf() * 0.3, 0)
+				lanterns.append(Transform3D(Basis(), lp))
+				lantern_col.append(Color(0.95, 0.22, 0.1) if rng.randf() < 0.7 else Color(1.0, 0.72, 0.4))
+	var stall_mat := StandardMaterial3D.new()
+	stall_mat.vertex_color_use_as_albedo = true
+	stall_mat.roughness = 0.8
+	stall_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	for k in 3:
+		_make_mm(Props.stall(roof_cols[k], goods_cols[k]), stall_sets[k], [], stall_mat, true, "Stalls%d" % k)
+	var crowd_mat := ShaderMaterial.new()
+	crowd_mat.shader = load("res://shaders/crowd.gdshader")
+	_make_mm(Props.person(true), people, people_c, crowd_mat, true, "CrowdBody", people_col)
+	_make_mm(Props.person(false), people, people_c, crowd_mat, true, "CrowdHead")
+	# 提灯
+	var lm := SphereMesh.new()
+	lm.radius = 0.2
+	lm.height = 0.52
+	lm.radial_segments = 12
+	lm.rings = 8
+	# 赤い提灯と白い提灯（和紙越しの灯り）
+	var red_x := []
+	var white_x := []
+	for i in lanterns.size():
+		if (lantern_col[i] as Color).g < 0.5:
+			red_x.append(lanterns[i])
+		else:
+			white_x.append(lanterns[i])
+	for pair in [[red_x, Color(1.0, 0.16, 0.06), "LanternsRed"], [white_x, Color(1.0, 0.8, 0.5), "LanternsWhite"]]:
+		var lmat := StandardMaterial3D.new()
+		lmat.albedo_color = pair[1]
+		lmat.emission_enabled = true
+		lmat.emission = pair[1]
+		lmat.emission_energy_multiplier = 2.2
+		lmat.roughness = 0.9
+		_make_mm(lm, pair[0], [], lmat, false, pair[2])
+	# 通路沿いの提灯の一部に本物の灯り
+	var placed: Array[Vector3] = []
+	var max_lights := 10 if lite else 18
+	for lt in lanterns:
+		var p: Vector3 = lt.origin
+		var ok := true
+		for q in placed:
+			if q.distance_to(p) < 6.5:
+				ok = false
+				break
+		if not ok:
+			continue
+		placed.append(p)
+		var l := OmniLight3D.new()
+		l.position = p + Vector3(0, -0.3, 0)
+		l.light_color = Color(1.0, 0.6, 0.3)
+		l.light_energy = 1.6
+		l.omni_range = 6.0
+		l.omni_attenuation = 1.2
+		add_child(l)
+		lantern_lights.append(l)
+		if placed.size() >= max_lights:
+			break
+	print("festival stalls=%d people=%d lanterns=%d" % [stall_sets[0].size() + stall_sets[1].size() + stall_sets[2].size(), people.size(), lanterns.size()])
+
+
+# ---------------------------------------------------------------- 町（夕立）
+
+func _build_town() -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var walls := [Color(0.5, 0.47, 0.41), Color(0.4, 0.4, 0.4), Color(0.34, 0.26, 0.2), Color(0.56, 0.54, 0.48), Color(0.36, 0.38, 0.41)]
+	var roofs := [Color(0.18, 0.2, 0.25), Color(0.25, 0.22, 0.2), Color(0.3, 0.34, 0.4)]
+	var pad := 4
+	for x in range(-pad, G + pad):
+		for z in range(-pad, G + pad):
+			var t := Vector2i(x, z)
+			var inside := x >= 0 and z >= 0 and x < G and z < G
+			if inside and not wall[x][z]:
+				continue
+			var c := tile_to_world(t)
+			var h := rng.randf_range(3.6, 7.2)
+			var wc: Color = walls[rng.randi() % walls.size()]
+			wc.a = 1.0
+			Props.box(st, c + Vector3(0, h * 0.5, 0), Vector3(TILE, h, TILE), wc)
+			var rc: Color = roofs[rng.randi() % roofs.size()]
+			Props.box(st, c + Vector3(0, h + 0.17, 0), Vector3(TILE * 1.08, 0.34, TILE * 1.08), rc)
+			if not inside:
+				continue
+			# 通路に面した側：庇と窓（ブロック塀の家も）
+			for d in _open_neighbors(t):
+				var nd := Vector3(d.x, 0, d.y)
+				var side := Vector3(-d.y, 0, d.x)
+				var face := c + nd * TILE * 0.5
+				var eave_y := rng.randf_range(2.5, 2.9)
+				Props.box(st, face + nd * 0.35 + Vector3(0, eave_y, 0), (side.abs() * TILE + nd.abs() * 0.7 + Vector3(0, 0.08, 0)), rc)
+				var floors := int(h / 2.6)
+				for f in floors:
+					var wy := 1.6 + f * 2.6
+					for sx in [-0.26, 0.26]:
+						if rng.randf() < 0.3:
+							continue
+						var lit := rng.randf() < 0.3
+						var win := Color(1.0, 0.72, 0.4, 0.0) if lit else Color(0.1, 0.12, 0.14, 1.0)
+						Props.box(st, face + nd * 0.02 + side * TILE * sx + Vector3(0, wy, 0), side.abs() * TILE * 0.3 + nd.abs() * 0.04 + Vector3(0, 0.8, 0), win)
+				if rng.randf() < 0.35:
+					# ブロック塀
+					Props.box(st, face + nd * 0.08 + Vector3(0, 0.8, 0), side.abs() * TILE + nd.abs() * 0.16 + Vector3(0, 1.6, 0), Color(0.62, 0.62, 0.6))
+	var mi := MeshInstance3D.new()
+	mi.name = "Town"
+	mi.mesh = st.commit()
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/town.gdshader")
+	mi.material_override = mat
+	add_child(mi)
+	# 電柱（通路沿い）と自販機
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = Color(0.5, 0.49, 0.47)
+	pole_mat.roughness = 0.4
+	var k := 0
+	for t in path_tiles:
+		k += 1
+		if k % 5 != 2:
+			continue
+		var ns := _open_neighbors(t)
+		var c := tile_to_world(t)
+		var off := Vector3(0.95, 0, 0.95)
+		if ns.size() > 0:
+			var d: Vector2i = ns[0]
+			off = Vector3(-d.y, 0, d.x) * 0.95
+		var pole := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.11
+		cm.bottom_radius = 0.15
+		cm.height = 8.0
+		pole.mesh = cm
+		pole.material_override = pole_mat
+		pole.position = c + off + Vector3(0, 4.0, 0)
+		add_child(pole)
+	var vend_mat := StandardMaterial3D.new()
+	vend_mat.albedo_color = Color(0.9, 0.92, 0.95)
+	vend_mat.emission_enabled = true
+	vend_mat.emission = Color(0.85, 0.92, 1.0)
+	vend_mat.emission_energy_multiplier = 2.2
+	var vends := 0
+	for x in range(1, G - 1):
+		for z in range(1, G - 1):
+			var t := Vector2i(x, z)
+			if not is_open(t) or t == start_tile or path_tiles.has(t) or _open_neighbors(t).size() != 1 or vends >= 3:
+				continue
+			var d: Vector2i = _open_neighbors(t)[0]
+			var back := -Vector3(d.x, 0, d.y)
+			var p := tile_to_world(t) + back * (TILE * 0.5 - 0.4)
+			var vm := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(0.9, 1.85, 0.7)
+			vm.mesh = bm
+			vm.material_override = vend_mat
+			vm.position = p + Vector3(0, 0.925, 0)
+			vm.rotation.y = atan2(back.x, back.z)
+			add_child(vm)
+			var l := OmniLight3D.new()
+			l.position = p - back * 0.8 + Vector3(0, 1.4, 0)
+			l.light_color = Color(0.8, 0.9, 1.0)
+			l.light_energy = 1.4
+			l.omni_range = 5.0
+			add_child(l)
+			vends += 1
+
+
+# ---------------------------------------------------------------- 地面・当たり判定
 
 func _build_ground() -> void:
-	# 通路マスク（土の筋）
 	var res := 8
 	var img := Image.create(G * res, G * res, false, Image.FORMAT_R8)
 	var hm := maze_half()
 	for px in G * res:
 		for pz in G * res:
 			var p := Vector3(-hm + (px + 0.5) / res * TILE, 0, -hm + (pz + 0.5) / res * TILE)
-			var v := 0.0
+			var val := 0.0
 			if is_open(world_to_tile(p)):
-				v = 1.0 - smoothstep(0.3, 0.95, path_center_dist(p))
-			img.set_pixel(px, pz, Color(v, 0, 0))
+				val = 1.0 - smoothstep(0.3, 0.95, path_center_dist(p))
+			img.set_pixel(px, pz, Color(val, 0, 0))
 	var tex := ImageTexture.create_from_image(img)
 	var mat := ShaderMaterial.new()
 	mat.shader = load("res://shaders/ground.gdshader")
 	mat.set_shader_parameter("path_mask", tex)
 	mat.set_shader_parameter("mask_rect", Vector4(-hm, -hm, hm * 2.0, hm * 2.0))
+	mat.set_shader_parameter("mode", int(cfg.get("ground", 0)))
+	if cfg.get("fade", false):
+		mat.set_shader_parameter("grass_color", Color(0.4, 0.44, 0.18))
+		mat.set_shader_parameter("meadow_color", Color(0.5, 0.52, 0.26))
+	if cfg.style == "grass":
+		mat.set_shader_parameter("grass_color", Color(0.2, 0.34, 0.08))
 	var mi := MeshInstance3D.new()
 	mi.name = "Ground"
 	var pm := PlaneMesh.new()
@@ -549,6 +699,8 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, rot := Bas
 		sb.transform = mi.transform
 		sb.add_child(cs)
 		parent.add_child(sb)
+	if mat == null:
+		mi.visible = false
 
 
 func _build_deck() -> void:
@@ -564,16 +716,12 @@ func _build_deck() -> void:
 	var ang := atan2(DECK_H, RAMP_LEN)
 	var ramp_len := sqrt(RAMP_LEN * RAMP_LEN + DECK_H * DECK_H)
 	var rot := Basis(Vector3.RIGHT, ang)
-	# 坂道
 	_box(deck, Vector3(2.0, 0.12, ramp_len), Vector3(e.x, DECK_H * 0.5 - 0.05, (ramp_start_z + ramp_end_z) * 0.5), wood, rot, true)
-	# デッキ
 	var dz := deck_center.z
 	_box(deck, Vector3(4.0, 0.16, 4.0), Vector3(e.x, DECK_H - 0.08, dz), wood, Basis(), true)
-	# 柱
 	for sx in [-1.8, 1.8]:
 		for sz in [-1.8, 1.8]:
 			_box(deck, Vector3(0.14, DECK_H, 0.14), Vector3(e.x + sx, DECK_H * 0.5, dz + sz), wood)
-	# 手すり（見た目＋当たり）
 	var rail_h := 1.0
 	for sx in [-2.0, 2.0]:
 		_box(deck, Vector3(0.06, 0.06, 4.0), Vector3(e.x + sx, DECK_H + rail_h, dz), wood)
@@ -582,37 +730,35 @@ func _build_deck() -> void:
 			_box(deck, Vector3(0.06, rail_h, 0.06), Vector3(e.x + sx, DECK_H + rail_h * 0.5, dz - 2.0 + k), wood)
 	_box(deck, Vector3(4.0, 0.06, 0.06), Vector3(e.x, DECK_H + rail_h, dz + 2.0), wood)
 	_box(deck, Vector3(4.0, 2.0, 0.1), Vector3(e.x, DECK_H + 1.0, dz + 2.0), null, Basis(), true)
-	# 坂道の両脇の見えない壁
 	for sx in [-1.1, 1.1]:
 		_box(deck, Vector3(0.1, 4.0, RAMP_LEN + 0.5), Vector3(e.x + sx, 2.0, (ramp_start_z + ramp_end_z) * 0.5), null, Basis(), true)
 		_box(deck, Vector3(0.05, 0.05, ramp_len), Vector3(e.x + sx * 0.95, DECK_H * 0.5 + 0.9, (ramp_start_z + ramp_end_z) * 0.5), wood, rot)
-	# デッキ側面を埋める（坂の横から落ちないよう）
 	for sx in [-1.0, 1.0]:
 		_box(deck, Vector3(1.0, 4.0, 0.1), Vector3(e.x + sx * 1.5, 2.0, dz - 2.0), null, Basis(), true)
-	# 見えない当たり判定は描画しない
-	for c in deck.get_children():
-		if c is MeshInstance3D and c.material_override == null:
-			c.visible = false
 
 
 # ---------------------------------------------------------------- 遠景（木立・山・電柱）
 
 func _build_distance() -> void:
+	var style: String = cfg.style
+	if style == "town":
+		return
 	var far := Node3D.new()
 	far.name = "Distance"
 	add_child(far)
-	# 木立：球の集まり
 	var sphere := SphereMesh.new()
 	sphere.radial_segments = 12
 	sphere.rings = 6
 	var tree_mat := StandardMaterial3D.new()
-	tree_mat.albedo_color = Color(0.13, 0.26, 0.08)
+	tree_mat.albedo_color = Color(0.13, 0.26, 0.08) if not cfg.get("fade", false) else Color(0.25, 0.3, 0.12)
+	if style == "festival":
+		tree_mat.albedo_color = Color(0.06, 0.08, 0.06)
 	tree_mat.roughness = 1.0
 	var xs := []
+	var rmin := 150.0 if style != "festival" else 45.0
 	for i in 220:
 		var a := rng.randf() * TAU
-		# 南側（見晴らし台の背後）は薄く
-		var d := rng.randf_range(150.0, 260.0)
+		var d := rng.randf_range(rmin, rmin + 110.0)
 		var base := Vector3(cos(a) * d, 0, sin(a) * d)
 		var h := rng.randf_range(8.0, 16.0)
 		for k in 3:
@@ -631,7 +777,6 @@ func _build_distance() -> void:
 	mmi.material_override = tree_mat
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	far.add_child(mmi)
-	# 山並み
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var segs := 160
@@ -649,19 +794,20 @@ func _build_distance() -> void:
 		var t0 := Vector3(cos(a0) * (R + 250), h0, sin(a0) * (R + 250))
 		var t1 := Vector3(cos(a1) * (R + 250), h1, sin(a1) * (R + 250))
 		var nn := -Vector3(cos(a0), -0.6, sin(a0)).normalized()
-		for v in [p0, t0, t1, p0, t1, p1]:
+		for vv in [p0, t0, t1, p0, t1, p1]:
 			st.set_normal(nn)
-			st.add_vertex(v)
+			st.add_vertex(vv)
 	var hills := MeshInstance3D.new()
 	hills.name = "Hills"
 	hills.mesh = st.commit()
 	var hill_mat := StandardMaterial3D.new()
-	hill_mat.albedo_color = Color(0.18, 0.32, 0.16)
+	hill_mat.albedo_color = Color(0.18, 0.32, 0.16) if style != "festival" else Color(0.08, 0.08, 0.14)
 	hill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	hills.material_override = hill_mat
 	hills.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	far.add_child(hills)
-	# 電柱と電線（北側の農道沿い）
+	if style == "festival":
+		return
 	var pole_mat := StandardMaterial3D.new()
 	pole_mat.albedo_color = Color(0.45, 0.43, 0.40)
 	var wire_mat := StandardMaterial3D.new()

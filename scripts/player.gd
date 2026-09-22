@@ -3,12 +3,15 @@ extends CharacterBody3D
 
 const WALK := 3.0
 const RUN := 5.6
-const EYE := 1.55
+var eye := 1.55
+
+signal stepped(running: bool)
 
 var yaw := 0.0
 var pitch := 0.0
 var bob_t := 0.0
 var locked := false
+var step_acc := 0.0
 var mouse_sens := 0.0022
 
 @onready var cam: Camera3D = $Camera
@@ -20,7 +23,7 @@ func _ready() -> void:
 	cap.height = 1.7
 	$Collision.shape = cap
 	$Collision.position = Vector3(0, 0.85, 0)
-	cam.position = Vector3(0, EYE, 0)
+	cam.position = Vector3(0, eye, 0)
 	floor_max_angle = deg_to_rad(40)
 	floor_snap_length = 0.4
 
@@ -73,6 +76,12 @@ func _physics_process(delta: float) -> void:
 	var hspeed := Vector2(velocity.x, velocity.z).length()
 	bob_t += delta * hspeed * (2.1 if running else 2.4)
 	var amp := clampf(hspeed / RUN, 0.0, 1.0) * (0.05 if running else 0.035)
-	cam.position = Vector3(sin(bob_t * 0.5) * amp * 0.6, EYE + absf(sin(bob_t)) * amp, 0)
+	cam.position = Vector3(sin(bob_t * 0.5) * amp * 0.6, eye + absf(sin(bob_t)) * amp, 0)
+	# 足音
+	if is_on_floor() and hspeed > 0.6:
+		step_acc += hspeed * delta
+		if step_acc > (0.78 if running else 0.62):
+			step_acc = 0.0
+			stepped.emit(running)
 	var fov_target := 76.0 if running and hspeed > 3.5 else 72.0
 	cam.fov = lerpf(cam.fov, fov_target, 1.0 - exp(-4.0 * delta))
