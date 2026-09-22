@@ -1,0 +1,115 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/maze.gd" id="2_maze"]
+[ext_resource type="Script" path="res://scripts/player.gd" id="3_player"]
+[ext_resource type="Script" path="res://scripts/kimi.gd" id="4_kimi"]
+[ext_resource type="Script" path="res://scripts/clouds.gd" id="5_clouds"]
+[ext_resource type="Shader" path="res://shaders/sky.gdshader" id="6_sky"]
+
+[sub_resource type="ShaderMaterial" id="SkyMat"]
+shader = ExtResource("6_sky")
+shader_parameter/zenith_color = Color(0.03, 0.17, 0.6, 1)
+shader_parameter/mid_color = Color(0.13, 0.43, 0.92, 1)
+shader_parameter/horizon_color = Color(0.6, 0.8, 1, 1)
+shader_parameter/ground_color = Color(0.46, 0.56, 0.42, 1)
+shader_parameter/energy = 0.9
+
+[sub_resource type="Sky" id="SummerSky"]
+sky_material = SubResource("SkyMat")
+radiance_size = 2
+
+[sub_resource type="Environment" id="SummerEnv"]
+background_mode = 2
+sky = SubResource("SummerSky")
+ambient_light_source = 3
+ambient_light_sky_contribution = 1.0
+ambient_light_energy = 1.0
+reflected_light_source = 2
+tonemap_mode = 3
+tonemap_exposure = 1.0
+tonemap_white = 6.0
+ssao_enabled = true
+ssao_radius = 1.2
+ssao_intensity = 1.6
+ssao_power = 1.4
+ssil_enabled = false
+ssil_radius = 3.0
+ssil_intensity = 0.8
+glow_enabled = true
+glow_intensity = 0.55
+glow_strength = 1.0
+glow_bloom = 0.06
+glow_blend_mode = 1
+glow_hdr_threshold = 1.1
+fog_enabled = true
+fog_mode = 0
+fog_light_color = Color(0.7, 0.82, 1, 1)
+fog_light_energy = 1.1
+fog_sun_scatter = 0.15
+fog_density = 0.0022
+fog_aerial_perspective = 0.3
+fog_sky_affect = 0.0
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.006
+volumetric_fog_albedo = Color(1, 0.98, 0.94, 1)
+volumetric_fog_anisotropy = 0.65
+volumetric_fog_length = 32.0
+volumetric_fog_detail_spread = 2.0
+volumetric_fog_ambient_inject = 0.0
+volumetric_fog_sky_affect = 0.0
+adjustment_enabled = true
+adjustment_brightness = 1.02
+adjustment_contrast = 1.08
+adjustment_saturation = 1.15
+
+[node name="root" type="Node3D" unique_id=1637766385]
+script = ExtResource("1_main")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=454278027]
+light_color = Color(1, 0.96, 0.87, 1)
+light_energy = 2.1
+light_angular_distance = 0.6
+light_volumetric_fog_energy = 1.2
+shadow_enabled = true
+shadow_bias = 0.04
+shadow_normal_bias = 1.2
+shadow_blur = 1.2
+directional_shadow_max_distance = 55.0
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1449416436]
+environment = SubResource("SummerEnv")
+
+[node name="Maze" type="Node3D" parent="." unique_id=1412997603]
+script = ExtResource("2_maze")
+
+[node name="Player" type="CharacterBody3D" parent="." unique_id=1691413572]
+script = ExtResource("3_player")
+
+[node name="Collision" type="CollisionShape3D" parent="Player" unique_id=345980801]
+
+[node name="Camera" type="Camera3D" parent="Player" unique_id=2079357226]
+fov = 72.0
+far = 4500.0
+
+[node name="Pollen" type="GPUParticles3D" parent="Player" unique_id=85497342]
+amount = 400
+lifetime = 8.0
+preprocess = 8.0
+
+[node name="Kimi" type="Node3D" parent="." unique_id=1184691032]
+script = ExtResource("4_kimi")
+
+[node name="Laugh" type="AudioStreamPlayer3D" parent="Kimi" unique_id=1108160963]
+unit_size = 9.0
+max_db = 4.0
+max_distance = 120.0
+panning_strength = 1.6
+attenuation_filter_cutoff_hz = 6000.0
+attenuation_filter_db = -18.0
+
+[node name="CicadaBed" type="AudioStreamPlayer" parent="." unique_id=1455248699]
+volume_db = -9.0
+
+[node name="Sky" type="Node3D" parent="." unique_id=749372294]
+script = ExtResource("5_clouds")
