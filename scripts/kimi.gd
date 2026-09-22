@@ -16,6 +16,7 @@ var done := false
 var scripted := false
 var laugh_allowed := true
 var laugh_timer := 3.0
+var hold := 0.0                   # スタート直後、見える所で待つ時間
 var speed := 4.0
 var dash := 6.5
 var laughs: Array[AudioStream] = []
@@ -66,15 +67,35 @@ func setup(maze_: Node3D, player_: Node3D, cfg_: Dictionary) -> void:
 	waypoints.clear()
 	wp = 0
 	var n: int = maze.path_tiles.size()
+	# 最初はスタートからまっすぐ見通せる位置に立ち、少し待ってから逃げる
+	waypoints.append(_intro_index())
 	for f in [0.28, 0.52, 0.76, 1.0]:
-		waypoints.append(clampi(int(round((n - 1) * f)), 0, n - 1))
+		var wi := clampi(int(round((n - 1) * f)), 0, n - 1)
+		if wi > waypoints.back():
+			waypoints.append(wi)
 	path_i = waypoints[0]
+	hold = 0.0 if maze.has_deck else 4.2
 	position = maze.tile_to_world(maze.path_tiles[path_i])
 	last_pos = position
 	_face(path_i + 1)
-	laugh_timer = rng.randf_range(2.2, 3.4)
+	laugh_timer = 3.0 if maze.has_deck else 3.4
 	_restore()
 	visible = not scripted
+
+
+## スタート地点からまっすぐ続く通路の、見通せるいちばん奥（2〜5タイル先）
+func _intro_index() -> int:
+	var p: Array = maze.path_tiles
+	if p.size() < 3:
+		return 0
+	if maze.has_deck:
+		# 見晴らし台から坂の下を見ると、迷路の入口に君が見える
+		return 0
+	var d: Vector2i = p[1] - p[0]
+	var i := 1
+	while i + 1 < p.size() and i < 5 and p[i + 1] - p[i] == d:
+		i += 1
+	return maxi(i, 2)
 
 
 # ---------------------------------------------------------------- 消える（最終ステージ）
@@ -399,6 +420,14 @@ func _process(delta: float) -> void:
 
 func _auto(delta: float, dist: float, los: bool) -> void:
 	laugh_timer -= delta
+	if hold > 0.0:
+		hold -= delta
+		if laugh_timer <= 0.0:
+			play_laugh(0)
+			var iv: Vector2 = cfg.laugh.interval
+			laugh_timer = rng.randf_range(iv.x, iv.y)
+		if dist > 3.0:
+			return
 	if laugh_timer <= 0.0 and laugh_allowed:
 		play_laugh()
 		var iv: Vector2 = cfg.laugh.interval

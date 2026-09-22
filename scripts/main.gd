@@ -14,6 +14,7 @@ extends Node3D
 @onready var clouds: Node3D = $Sky
 @onready var pollen: GPUParticles3D = $Player/Pollen
 @onready var cicada_bed: AudioStreamPlayer = $CicadaBed
+var fx: Node3D
 
 var stages: Array = Stages.all()
 var stage := 0
@@ -79,6 +80,11 @@ func _ready() -> void:
 	_setup_particles()
 	_setup_heat_haze()
 	_setup_ui()
+	fx = Node3D.new()
+	fx.name = "Effects"
+	fx.set_script(load("res://scripts/effects.gd"))
+	add_child(fx)
+	fx.setup(player, env, overlay.get_parent())
 	player.stepped.connect(_on_step)
 	kimi.found.connect(_on_found)
 	var args := OS.get_cmdline_user_args()
@@ -97,7 +103,7 @@ func _ready() -> void:
 				if p == "start":
 					poses.append(null)
 					continue
-				if p == "fin" or p == "behind" or p == "follow" or p.begins_with("look:"):
+				if p == "fin" or p == "behind" or p == "follow" or p.begins_with("look:") or p.begins_with("wait:"):
 					poses.append(p)
 					continue
 				var v := p.split(",")
@@ -176,6 +182,11 @@ func _apply_look(c: Dictionary) -> void:
 	env.tonemap_exposure = c.exposure
 	env.adjustment_saturation = c.saturation
 	env.adjustment_contrast = c.contrast
+	var gl: Array = c.get("glow", [0.55, 0.06, 1.1])
+	env.glow_intensity = gl[0]
+	env.glow_bloom = gl[1]
+	env.glow_hdr_threshold = gl[2]
+	fx.set_stage(c)
 	if RenderingServer.get_current_rendering_method() == "forward_plus":
 		env.ssr_enabled = c.style == "town"
 	else:
@@ -506,6 +517,7 @@ func _process(delta: float) -> void:
 			var paused := Input.mouse_mode != Input.MOUSE_MODE_CAPTURED and not autowalk and shot_dir == ""
 			pause_label.visible = paused and not hint.visible
 			player.locked = paused
+	fx.active = state in ["play", "finale", "title"]
 	if autowalk and state in ["play", "finale"]:
 		_autowalk(delta)
 
@@ -874,6 +886,12 @@ func _run_shots() -> void:
 				fin_t = 100.0
 				for f in 3:
 					await get_tree().process_frame
+				continue
+			if p.begins_with("wait:"):
+				for f in int(p.substr(5)):
+					await get_tree().process_frame
+				get_viewport().get_texture().get_image().save_png(shot_dir.path_join("shot_%02d.png" % i))
+				print("saved shot %d (wait)" % i)
 				continue
 			if p == "follow":
 				# 君が走り出した地点へ（まっすぐな通路の手前）
