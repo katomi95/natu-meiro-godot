@@ -59,6 +59,8 @@ var petals: GPUParticles3D
 var fin_phase := 0
 var fin_t := 0.0
 var fin_spot := Vector3.ZERO
+var fin_wait := 0.0
+var fin_from := Vector3.ZERO
 var solo: AudioStreamPlayer3D
 
 # テスト
@@ -94,6 +96,9 @@ func _ready() -> void:
 			for p in a.substr(7).split(";"):
 				if p == "start":
 					poses.append(null)
+					continue
+				if p == "fin" or p == "behind" or p == "follow" or p.begins_with("look:"):
+					poses.append(p)
 					continue
 				var v := p.split(",")
 				if v.size() >= 5:
@@ -386,26 +391,27 @@ func _finale(delta: float) -> void:
 				fin_t = 0.0
 		1:
 			if player.global_position.distance_to(kimi.global_position) < 5.2 or fin_t > 18.0:
+				# 笑って、見通しのよいまっすぐな通路の先まで駆けていく
 				kimi.play_laugh(0, 1.0)
-				var kt: Vector2i = maze.world_to_tile(kimi.global_position)
-				var pp: Array = maze.find_path(kt, maze.goal_tile)
-				if pp.size() < 4:
-					# 出口まで近いときは、出口から先の通路（どこでもよい）へ
-					pp = [kt]
-					for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-						if maze.is_open(kt + d) and maze.is_open(kt + d * 2):
-							pp = [kt, kt + d, kt + d * 2, kt + d * 3] if maze.is_open(kt + d * 3) else [kt, kt + d, kt + d * 2]
-							break
-				kimi.run_tiles(pp.slice(1, mini(4, pp.size())), 4.4)
+				fin_from = kimi.global_position
+				kimi.run_tiles(_straight_run(maze.world_to_tile(kimi.global_position)), 3.6)
 				fin_phase = 2
 				fin_t = 0.0
+				fin_wait = 0.0
 		2:
-			# 角を曲がった先へ消える
-			if kimi.visible and kimi.route_done():
-				fin_spot = kimi.global_position
-				kimi.visible = false
-			if not kimi.visible and (player.global_position.distance_to(fin_spot) < 3.1 or fin_t > 13.0):
-				# 誰もいない
+			if not kimi.vanishing:
+				if kimi.route_done():
+					fin_wait += delta
+					# 立ち止まった君がプレイヤーから見えた瞬間に消える
+					# （角の先で待っていても、曲がって目に入ったところで消える）
+					var d := player.global_position.distance_to(kimi.global_position)
+					if (kimi.has_los() and d < 20.0 and fin_wait > 0.5) or d < 4.0 or fin_wait > 30.0:
+						kimi.vanish(Vector3(0.85, 0, 0.52))
+						_oneshot3d(sfx.gust, kimi.global_position + Vector3(0, 1.5, 0), -8.0, 6.0)
+						fin_spot = kimi.hat_rest
+						fin_t = 0.0
+			elif player.global_position.distance_to(fin_spot) < 2.2 or fin_t > 14.0:
+				# 帽子のところまで来ても、誰もいない
 				_set_amb({"cicada": 0.0, "wind": 0.1}, 3.0)
 				var tw := create_tween().set_parallel()
 				tw.tween_property(env, "adjustment_saturation", 0.6, 6.0)
@@ -459,6 +465,29 @@ func _finale(delta: float) -> void:
 			if fin_t > 3.0:
 				fin_phase = 8
 				_end()
+
+
+## 君のいるタイルから同じ向きにまっすぐ続く通路（2〜4タイル）。消える瞬間を見通せるように
+func _straight_run(from: Vector2i) -> Array:
+	var best_score := -99.0
+	var best: Array = []
+	var away: Vector3 = kimi.global_position - player.global_position
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var run: Array = []
+		var t: Vector2i = from + d
+		while maze.is_open(t) and run.size() < 4:
+			run.append(t)
+			t += d
+		# プレイヤーから遠ざかる向きを優先
+		var al: float = Vector3(d.x, 0, d.y).dot(away.normalized())
+		var score: float = run.size() + (4.0 if al > 0.7 else (0.0 if al > -0.3 else -6.0))
+		if run.size() >= 2 and score > best_score:
+			best_score = score
+			best = run
+	if best.is_empty():
+		var pp: Array = maze.find_path(from, maze.goal_tile)
+		return pp.slice(1, mini(4, pp.size()))
+	return best
 
 
 # ================================================================ 進行
@@ -839,6 +868,42 @@ func _run_shots() -> void:
 		poses.append(null)
 	for i in poses.size():
 		var p = poses[i]
+		if p is String:
+			# 最終ステージ確認用: fin=君を出す / look:N=Nフレーム待って君(帽子)の方を向く
+			if p == "fin":
+				fin_t = 100.0
+				for f in 3:
+					await get_tree().process_frame
+				continue
+			if p == "follow":
+				# 君が走り出した地点へ（まっすぐな通路の手前）
+				player.global_position = Vector3(fin_from.x, 0.05, fin_from.z)
+				continue
+			if p == "behind":
+				var kt: Vector2i = maze.world_to_tile(kimi.global_position)
+				var back: Vector3 = kimi.global_transform.basis.z
+				var bt: Vector2i = kt + Vector2i(roundi(back.x), roundi(back.z))
+				if not maze.is_open(bt):
+					for dd in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+						if maze.is_open(kt + dd):
+							bt = kt + dd
+							break
+				player.global_position = maze.tile_to_world(bt) + Vector3(0, 0.05, 0)
+				var dk: Vector3 = kimi.global_position - player.global_position
+				player.set_look(atan2(-dk.x, -dk.z), -0.1)
+				for f in 3:
+					await get_tree().process_frame
+				continue
+			for f in int(p.substr(5)):
+				await get_tree().process_frame
+			var tgt: Vector3 = kimi.global_position if kimi.visible and not kimi.vanishing else kimi.hat.global_position
+			var d: Vector3 = tgt - player.global_position
+			player.set_look(atan2(-d.x, -d.z), -0.12)
+			await get_tree().process_frame
+			var im := get_viewport().get_texture().get_image()
+			im.save_png(shot_dir.path_join("shot_%02d.png" % i))
+			print("saved shot %d phase=%d vanishing=%s dist=%.1f" % [i, fin_phase, kimi.vanishing, d.length()])
+			continue
 		if p != null:
 			if p[0].y < -50.0:   # y<-50 なら「君」の後方に置く（y<-150 は止めずに走らせる）
 				var k: Vector3 = kimi.global_position

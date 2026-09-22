@@ -36,6 +36,11 @@ var arm_l: Node3D
 var arm_r: Node3D
 var leg_l: Node3D
 var leg_r: Node3D
+var hat: Node3D
+var fade_mats: Array[StandardMaterial3D] = []
+var burst: GPUParticles3D
+var vanishing := false
+var hat_rest := Vector3.ZERO      # 消えたあと帽子が落ちた場所
 @onready var laugh: AudioStreamPlayer3D = $Laugh
 
 
@@ -68,13 +73,134 @@ func setup(maze_: Node3D, player_: Node3D, cfg_: Dictionary) -> void:
 	last_pos = position
 	_face(path_i + 1)
 	laugh_timer = rng.randf_range(2.2, 3.4)
+	_restore()
 	visible = not scripted
+
+
+# ---------------------------------------------------------------- 消える（最終ステージ）
+
+func _build_burst() -> void:
+	burst = GPUParticles3D.new()
+	burst.amount = 220
+	burst.lifetime = 3.2
+	burst.one_shot = true
+	burst.explosiveness = 0.35
+	burst.local_coords = false
+	burst.emitting = false
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(0.28, 0.85, 0.28)
+	pm.direction = Vector3(0.85, 0.9, 0.52)
+	pm.spread = 40.0
+	pm.initial_velocity_min = 0.6
+	pm.initial_velocity_max = 2.2
+	pm.gravity = Vector3(0.6, 0.15, 0.35)
+	pm.angular_velocity_min = -300.0
+	pm.angular_velocity_max = 300.0
+	pm.turbulence_enabled = true
+	pm.turbulence_noise_strength = 1.2
+	pm.scale_min = 0.6
+	pm.scale_max = 1.3
+	var curve := Curve.new()
+	curve.add_point(Vector2(0, 1))
+	curve.add_point(Vector2(0.7, 0.8))
+	curve.add_point(Vector2(1, 0))
+	var ct := CurveTexture.new()
+	ct.curve = curve
+	pm.scale_curve = ct
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 0.98, 0.9))
+	grad.set_color(1, Color(0.98, 0.78, 0.3))
+	var gt := GradientTexture1D.new()
+	gt.gradient = grad
+	pm.color_initial_ramp = gt
+	burst.process_material = pm
+	var q := QuadMesh.new()
+	q.size = Vector2(0.11, 0.055)
+	var m := StandardMaterial3D.new()
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	m.vertex_color_use_as_albedo = true
+	m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	m.emission_enabled = true
+	m.emission = Color(1.0, 0.92, 0.7)
+	m.emission_energy_multiplier = 2.4
+	q.material = m
+	burst.draw_pass_1 = q
+	burst.visibility_aabb = AABB(Vector3(-10, -3, -10), Vector3(20, 10, 20))
+	add_child(burst)
+
+
+## 見ている前で、光る花びらになって消える。帽子だけが風に飛ばされて道に落ちる
+func vanish(wind_dir: Vector3) -> void:
+	if vanishing:
+		return
+	vanishing = true
+	route.clear()
+	# 花びら（本体が消えても舞い続けるよう親へ移す）
+	remove_child(burst)
+	get_parent().add_child(burst)
+	burst.global_position = global_position + Vector3(0, 0.9, 0)
+	burst.restart()
+	burst.emitting = true
+	# 体が透けていく
+	for m in fade_mats:
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
+	var tw := create_tween().set_parallel()
+	for m in fade_mats:
+		var c := m.albedo_color
+		tw.tween_property(m, "albedo_color", Color(c.r, c.g, c.b, 0.0), 2.4).set_ease(Tween.EASE_IN)
+	tw.tween_property(body, "position:y", 0.3, 2.4)
+	# 帽子だけが残って風に舞う
+	var ht := hat.global_transform
+	body.remove_child(hat)
+	get_parent().add_child(hat)
+	hat.global_transform = ht
+	var w := Vector3(wind_dir.x, 0, wind_dir.z).normalized()
+	# 落下点は通路の上（壁の中に落ちないよう、君の立っていたタイル内に収める）
+	var tc: Vector3 = maze.tile_to_world(maze.world_to_tile(global_position))
+	var land := tc + w * 0.75
+	if maze.is_open(maze.world_to_tile(tc + w * 2.0)):
+		land = tc + w * 1.6
+	land.y = 0.03
+	hat_rest = land
+	var peak := ht.origin.lerp(land, 0.4) + Vector3(0, 0.9, 0)
+	var ht2 := create_tween()
+	ht2.tween_property(hat, "global_position", peak, 1.1).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_SINE)
+	ht2.parallel().tween_property(hat, "rotation", Vector3(0.9, 2.5, 0.4), 1.1)
+	ht2.tween_property(hat, "global_position", land, 1.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	ht2.parallel().tween_property(hat, "rotation", Vector3(0.05, 4.2, -0.04), 1.6)
+	var hide := create_tween()
+	hide.tween_interval(2.5)
+	hide.tween_callback(func(): visible = false)
+
+
+## 次に遊ぶときのため元に戻す
+func _restore() -> void:
+	vanishing = false
+	for m in fade_mats:
+		m.albedo_color.a = 1.0
+		m.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+	body.position = Vector3.ZERO
+	if hat.get_parent() != body:
+		hat.get_parent().remove_child(hat)
+		body.add_child(hat)
+	hat.position = Vector3(0, 1.76, 0)
+	hat.rotation = Vector3(-0.08, 0, 0)
+	if burst.get_parent() != self:
+		burst.get_parent().remove_child(burst)
+		add_child(burst)
+	burst.emitting = false
 
 
 # ---------------------------------------------------------------- 見た目
 
-func _mat(c: Color, backlight := false) -> StandardMaterial3D:
+func _mat(c: Color, backlight := false, fade := true) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
+	if fade:
+		fade_mats.append(m)
 	m.albedo_color = c
 	m.roughness = 0.75
 	if backlight:
@@ -103,7 +229,6 @@ func _build_model() -> void:
 	var white := _mat(Color(0.97, 0.97, 0.95), true)
 	var skin := _mat(Color(1.0, 0.84, 0.72), true)
 	var hair := _mat(Color(0.12, 0.08, 0.05))
-	var ribbon := _mat(Color(0.25, 0.55, 0.85))
 	var sandal := _mat(Color(0.55, 0.38, 0.22))
 	# 脚：股関節で回る（脚＋サンダル）
 	leg_l = Node3D.new(); leg_l.position = Vector3(-0.07, 0.66, 0); body.add_child(leg_l)
@@ -146,15 +271,23 @@ func _build_model() -> void:
 	var hl := CapsuleMesh.new()
 	hl.radius = 0.1; hl.height = 0.42
 	_part(body, hl, hair, Vector3(0, 1.5, 0.07), Vector3(0.12, 0, 0), Vector3(1.0, 1.0, 0.5))
+	# 帽子（最後に風で飛ばされて残るので、独立したノードにする）
+	hat = Node3D.new()
+	hat.position = Vector3(0, 1.76, 0)
+	hat.rotation = Vector3(-0.08, 0, 0)
+	body.add_child(hat)
+	var hat_white := _mat(Color(0.97, 0.97, 0.95), true, false)
+	var hat_ribbon := _mat(Color(0.25, 0.55, 0.85), false, false)
 	var brim := CylinderMesh.new()
 	brim.top_radius = 0.3; brim.bottom_radius = 0.31; brim.height = 0.012; brim.radial_segments = 32
-	_part(body, brim, white, Vector3(0, 1.76, 0), Vector3(-0.08, 0, 0))
+	_part(hat, brim, hat_white, Vector3.ZERO)
 	var crown := CylinderMesh.new()
 	crown.top_radius = 0.1; crown.bottom_radius = 0.125; crown.height = 0.11
-	_part(body, crown, white, Vector3(0, 1.82, 0), Vector3(-0.08, 0, 0))
+	_part(hat, crown, hat_white, Vector3(0, 0.06, 0))
 	var band := CylinderMesh.new()
 	band.top_radius = 0.127; band.bottom_radius = 0.128; band.height = 0.03
-	_part(body, band, ribbon, Vector3(0, 1.785, 0), Vector3(-0.08, 0, 0))
+	_part(hat, band, hat_ribbon, Vector3(0, 0.025, 0))
+	_build_burst()
 	for c in body.find_children("*", "MeshInstance3D", true, false):
 		(c as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
@@ -255,7 +388,9 @@ func _process(delta: float) -> void:
 	var open_cut: float = cfg.laugh.cutoff
 	laugh.attenuation_filter_cutoff_hz = lerpf(laugh.attenuation_filter_cutoff_hz, open_cut if los else open_cut * 0.25, 1.0 - exp(-5.0 * delta))
 	laugh.volume_db = lerpf(laugh.volume_db, float(cfg.laugh.db) + (0.0 if los else -3.0), 1.0 - exp(-5.0 * delta))
-	if scripted:
+	if vanishing:
+		pass
+	elif scripted:
 		_follow_route(delta)
 	elif not done:
 		_auto(delta, dist, los)
