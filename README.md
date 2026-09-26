@@ -66,6 +66,7 @@ godot --path . -- --stage=1 --shots=<dir> --pose=start   # 撮影
 ## クレジット
 
 - 効果音素材: [ポケットサウンド / 効果音素材](https://pocket-se.info/)（「君」の笑い声、蝉の声、ヒグラシ、祭囃子、花火の破裂音）
+  - 規約で音素材そのものの二次配布が禁止されているため、元の mp3 はこのリポジトリに含めていない（ゲーム本体の `docs/` には組み込み済み）
 - その他の環境音は `tools/gen_audio.py` によるプログラム合成
 - フォント: Noto Serif JP（SIL Open Font License 1.1、`fonts/OFL.txt`）。使用文字のみにサブセット化
 - エンジン: [Godot Engine](https://godotengine.org/) 4.6
