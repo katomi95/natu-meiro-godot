@@ -263,13 +263,20 @@ func _setup_audio() -> void:
 	var angs := [0.3, 1.6, 2.7, 3.9, 5.1]
 	for i in 5:
 		cicadas3d[i].position = Vector3(cos(angs[i]), 0.12, sin(angs[i])) * 30.0
-	for n in ["thunder_near", "thunder_far", "step_dirt", "step_grass", "step_wet", "bird", "insect", "higurashi", "gust", "cicada_solo"]:
+	for n in ["thunder_near", "thunder_far", "step_dirt", "step_grass", "step_wet", "bird", "insect", "gust"]:
 		sfx[n] = load("res://audio/synth/%s.wav" % n)
 	step_player = AudioStreamPlayer.new()
 	step_player.volume_db = -14.0
 	player.add_child(step_player)
+	# 最後に遠くで鳴く一匹（ヒグラシ / ポケットサウンド）
+	var higu: AudioStreamMP3 = load("res://audio/higurashi.mp3")
+	higu.loop = true
+	# 単発で鳴らす用（ループのままだと鳴り止まない）
+	var higu_once: AudioStreamMP3 = higu.duplicate()
+	higu_once.loop = false
+	sfx["higurashi"] = higu_once
 	solo = AudioStreamPlayer3D.new()
-	solo.stream = _wav_loop("res://audio/synth/cicada_solo.wav")
+	solo.stream = higu
 	solo.unit_size = 30.0
 	solo.volume_db = -80.0
 	add_child(solo)
@@ -387,7 +394,7 @@ func _finale(delta: float) -> void:
 			higurashi_t -= delta
 			if higurashi_t <= 0.0:
 				higurashi_t = rng.randf_range(20.0, 38.0)
-				_oneshot3d(sfx.higurashi, _around(40, 70, 6), -10.0, 25.0)
+				_oneshot3d(sfx.higurashi, _around(40, 70, 6), -12.0, 25.0, 6000.0, rng.randf_range(0.97, 1.03))
 			var near_exit := ptile.distance_to(maze.goal_tile) < 3.0
 			if fin_t > 16.0 or near_exit:
 				var pp: Array = maze.find_path(ptile, maze.goal_tile)

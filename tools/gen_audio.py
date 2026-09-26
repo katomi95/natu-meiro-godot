@@ -232,4 +232,5 @@ def insect():
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     rain(); wind(); gust(); crowd(); thunder(True); thunder(False)
-    steps(); aburazemi(); higurashi(); bird(); insect()
+    steps(); bird(); insect()
+    # aburazemi() / higurashi() は実素材（ポケットサウンド）に差し替えたため未使用
