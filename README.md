@@ -55,12 +55,20 @@ Web版の[夏迷路](https://github.com/katomi95/natu-meiro)（three.js）を Go
 - `tools/gen_audio.py` … 雨・雷・風・ざわめき・足音・ヒグラシ・最後の蝉などを合成して `audio/synth/` に書き出す
 - `docs/` … Web書き出し（GitHub Pages 公開用）
 
+## 「君」のモデル（任意・ローカルのみ）
+
+`local/kimi.glb`（一枚メッシュの3Dモデル）を置くと、「君」がそのモデルに差し替わります。
+ボーンが無くても歩いて見えるよう、裾から下を左右交互に振る頂点シェーダー（`shaders/kimi_model.gdshader`）を当てています。
+置かなければ、これまでどおり簡易モデルで動きます。`local/` は git とWeb書き出しの両方から除外しています。
+
 ## テスト用の引数
 
 ```
 godot --path . -- --stage=2                         # ステージ3から
 godot --path . -- --autowalk --fast                  # 正解ルートを自動で歩き、エンディングまで確認
 godot --path . -- --stage=1 --shots=<dir> --pose=start   # 撮影
+godot --path . -- --stage=0 --fpscheck                   # 平均fpsを測る
+godot --path . -- --stage=0 --off=msaa,shadow,volfog     # 負荷の切り分け
 ```
 
 ## クレジット

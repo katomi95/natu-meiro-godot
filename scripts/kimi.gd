@@ -42,6 +42,11 @@ var fade_mats: Array[StandardMaterial3D] = []
 var burst: GPUParticles3D
 var vanishing := false
 var hat_rest := Vector3.ZERO      # 消えたあと帽子が落ちた場所
+# 取り込んだモデル（local/kimi.glb がある時だけ。git には入れない）
+const MODEL_PATH := "res://local/kimi.glb"
+const MODEL_HEIGHT := 1.56        # 仕上がりの身長(m)
+var model: Node3D
+var model_mat: ShaderMaterial
 @onready var laugh: AudioStreamPlayer3D = $Laugh
 
 
@@ -165,6 +170,9 @@ func vanish(wind_dir: Vector3) -> void:
 	burst.restart()
 	burst.emitting = true
 	# 体が透けていく
+	if model_mat != null:
+		hat.visible = true
+		create_tween().tween_method(func(v): model_mat.set_shader_parameter("alpha", v), 1.0, 0.0, 2.4).set_ease(Tween.EASE_IN)
 	for m in fade_mats:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
@@ -200,6 +208,9 @@ func vanish(wind_dir: Vector3) -> void:
 ## 次に遊ぶときのため元に戻す
 func _restore() -> void:
 	vanishing = false
+	if model_mat != null:
+		model_mat.set_shader_parameter("alpha", 1.0)
+		hat.visible = false
 	for m in fade_mats:
 		m.albedo_color.a = 1.0
 		m.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
@@ -208,7 +219,7 @@ func _restore() -> void:
 	if hat.get_parent() != body:
 		hat.get_parent().remove_child(hat)
 		body.add_child(hat)
-	hat.position = Vector3(0, 1.76, 0)
+	hat.position = Vector3(0, (MODEL_HEIGHT * 0.95) if model != null else 1.76, 0)
 	hat.rotation = Vector3(-0.08, 0, 0)
 	if burst.get_parent() != self:
 		burst.get_parent().remove_child(burst)
@@ -311,6 +322,47 @@ func _build_model() -> void:
 	_build_burst()
 	for c in body.find_children("*", "MeshInstance3D", true, false):
 		(c as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	_load_local_model()
+
+
+## local/kimi.glb があれば、そちらを「君」として使う（無ければ今までの簡易モデル）
+func _load_local_model() -> void:
+	if not ResourceLoader.exists(MODEL_PATH):
+		return
+	var inst: Node3D = (load(MODEL_PATH) as PackedScene).instantiate()
+	var found := inst.find_children("*", "MeshInstance3D", true, false)
+	if found.is_empty():
+		push_warning("kimi.glb に MeshInstance3D が無い")
+		return
+	var mi: MeshInstance3D = found[0]
+	var src := mi.mesh.surface_get_material(0) as StandardMaterial3D
+	model_mat = ShaderMaterial.new()
+	model_mat.shader = load("res://shaders/kimi_model.gdshader")
+	if src != null:
+		model_mat.set_shader_parameter("albedo_tex", src.albedo_texture)
+		model_mat.set_shader_parameter("orm_tex", src.roughness_texture)
+	mi.material_override = model_mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	var aabb: AABB = mi.mesh.get_aabb()
+	var s: float = MODEL_HEIGHT / aabb.size.y
+	inst.scale = Vector3.ONE * s
+	inst.rotation.y = PI                       # モデルは +Z 向き、こちらは -Z 向き
+	inst.position = Vector3(0, -aabb.position.y * s, 0)   # 足を地面に
+	model = Node3D.new()
+	model.name = "Model"
+	model.add_child(inst)
+	body.add_child(model)
+	# 簡易モデルの体は隠す（帽子は最後に飛ばすので残しておく）
+	for c in body.find_children("*", "MeshInstance3D", true, false):
+		if not hat.is_ancestor_of(c) and not model.is_ancestor_of(c):
+			(c as MeshInstance3D).visible = false
+	# 残す帽子は麦わらに
+	for c in hat.get_children():
+		var m := (c as MeshInstance3D).material_override as StandardMaterial3D
+		m.albedo_color = Color(0.14, 0.18, 0.35) if m.albedo_color.b > m.albedo_color.r else Color(0.86, 0.72, 0.42)
+	hat.position = Vector3(0, MODEL_HEIGHT * 0.95, 0)
+	hat.scale = Vector3.ONE * 1.15
+	hat.visible = false
 
 
 # ---------------------------------------------------------------- 動き
@@ -495,3 +547,7 @@ func _animate(delta: float) -> void:
 	body.rotation.x = -0.12 * run * amt   # 走るときは前傾
 	skirt.rotation.x = sin(anim_t * 3.1) * 0.03 + 0.1 * run * amt
 	skirt.rotation.z = sin(stride) * 0.04 * amt + sin(anim_t * 2.3) * 0.025
+	if model_mat != null and not vanishing:
+		model_mat.set_shader_parameter("swing", swing)
+		model_mat.set_shader_parameter("sway", sin(stride) * 0.035 * amt + sin(anim_t * 2.3) * 0.012)
+		model_mat.set_shader_parameter("wind_phase", anim_t)

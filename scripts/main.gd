@@ -96,6 +96,18 @@ func _ready() -> void:
 			shot_dir = a.substr(8)
 		elif a == "--autowalk":
 			autowalk = true
+		elif a.begins_with("--off="):
+			# 負荷切り分け用: --off=shadow,volfog,ssao,msaa,glow,haze
+			for o in a.substr(6).split(","):
+				match o:
+					"shadow": sun.shadow_enabled = false
+					"volfog": env.volumetric_fog_enabled = false
+					"ssao": env.ssao_enabled = false
+					"msaa": get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+					"glow": env.glow_enabled = false
+					"haze": player.get_node("Camera/HeatHaze").visible = false
+		elif a == "--fpscheck":
+			_fps_check()
 		elif a == "--fast":
 			Engine.time_scale = 3.0
 		elif a.begins_with("--pose="):
@@ -879,6 +891,17 @@ func _on_step_accum(s: float) -> void:
 	if _acc > 0.62:
 		_acc = 0.0
 		_on_step(false)
+
+
+## 平均fpsを測るだけのモード（--stage=N と一緒に使う）
+func _fps_check() -> void:
+	for f in 120:
+		await get_tree().process_frame
+	var t0 := Time.get_ticks_usec()
+	for f in 180:
+		await get_tree().process_frame
+	print("avg fps = %.1f" % (180.0 / ((Time.get_ticks_usec() - t0) / 1000000.0)))
+	get_tree().quit()
 
 
 func _run_shots() -> void:
