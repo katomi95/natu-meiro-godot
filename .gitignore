@@ -5,3 +5,4 @@ shots/
 audio/*.mp3
 audio/*.mp3.import
 local/
+builds/

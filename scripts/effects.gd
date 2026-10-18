@@ -25,6 +25,8 @@ var hanabi: AudioStream
 var fw_pool: Array[GPUParticles3D] = []
 var fw_next := 0
 var fw_mat: StandardMaterial3D
+var fw_lights: Array[OmniLight3D] = []
+var fw_light_next := 0
 var fw_colors := [Color(1.0, 0.18, 0.12), Color(1.0, 0.65, 0.1), Color(0.2, 0.6, 1.0), Color(0.35, 1.0, 0.35), Color(1.0, 0.3, 0.8), Color(1.0, 0.9, 0.6)]
 
 
@@ -156,6 +158,16 @@ func _build_fireworks() -> void:
 		p.draw_pass_1 = q
 		add_child(p)
 		fw_pool.append(p)
+	# 花火の閃光（毎回作ると描画側でエラーが出るので使い回す）
+	for i in 4:
+		var l := OmniLight3D.new()
+		l.light_energy = 0.0
+		l.omni_range = 160.0
+		l.omni_attenuation = 0.6
+		l.shadow_enabled = false
+		l.visible = false
+		add_child(l)
+		fw_lights.append(l)
 
 
 func _fw_material(col: Color, speed: float, kind: int) -> ParticleProcessMaterial:
@@ -255,17 +267,15 @@ func _burst(pos: Vector3, col: Color, big: bool) -> void:
 		p2.restart()
 		p2.emitting = true
 	# 空と地面を一瞬その色に照らす
-	var l := OmniLight3D.new()
+	var l: OmniLight3D = fw_lights[fw_light_next]
+	fw_light_next = (fw_light_next + 1) % fw_lights.size()
 	l.light_color = col.lerp(Color.WHITE, 0.3)
-	l.light_energy = 0.0
-	l.omni_range = 160.0
-	l.omni_attenuation = 0.6
-	add_child(l)
 	l.global_position = pos
+	l.visible = true
 	var tw := create_tween()
 	tw.tween_property(l, "light_energy", 5.0 if big else 3.0, 0.06)
 	tw.tween_property(l, "light_energy", 0.0, 1.4).set_ease(Tween.EASE_OUT)
-	tw.tween_callback(l.queue_free)
+	tw.tween_callback(func(): l.visible = false)
 	# 音は光より遅れて届く（音速 約340m/s）
 	var dist := pos.distance_to(player.global_position)
 	get_tree().create_timer(dist / 340.0).timeout.connect(func():

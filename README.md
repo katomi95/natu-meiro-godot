@@ -55,6 +55,22 @@ Web版の[夏迷路](https://github.com/katomi95/natu-meiro)（three.js）を Go
 - `tools/gen_audio.py` … 雨・雷・風・ざわめき・足音・ヒグラシ・最後の蝉などを合成して `audio/synth/` に書き出す
 - `docs/` … Web書き出し（GitHub Pages 公開用）
 
+## デスクトップ版（Windows / macOS）
+
+`export_presets.cfg` に Windows と macOS の書き出し設定があります（出力先 `builds/`、git からは除外）。
+
+```
+godot --headless --path . --export-release "Windows" "builds/windows/夏迷路.exe"
+godot --headless --path . --export-release "macOS"   "builds/macos/夏迷路.zip"
+```
+
+- Windows: 単体の .exe（データ同梱）。ダブルクリックで起動
+- macOS: zip を展開すると `夏迷路.app`。ユニバーサル（Apple Silicon / Intel）
+  - 署名していないので初回は Gatekeeper に止められます。`夏迷路.app` を **右クリック →「開く」**、
+    または `xattr -dr com.apple.quarantine 夏迷路.app` で解除してください
+- F11 で全画面、Esc でマウス解放
+- デスクトップ版は内部解像度を 0.8 倍で描画して負荷を下げています（Web版は等倍）
+
 ## 「君」のモデル（任意・ローカルのみ）
 
 `local/kimi.glb`（一枚メッシュの3Dモデル）を置くと、「君」がそのモデルに差し替わります。

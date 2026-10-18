@@ -54,7 +54,7 @@ volumetric_fog_enabled = true
 volumetric_fog_density = 0.006
 volumetric_fog_albedo = Color(1, 0.98, 0.94, 1)
 volumetric_fog_anisotropy = 0.65
-volumetric_fog_length = 32.0
+volumetric_fog_length = 20.0
 volumetric_fog_detail_spread = 2.0
 volumetric_fog_ambient_inject = 0.0
 volumetric_fog_sky_affect = 0.0
@@ -75,7 +75,7 @@ shadow_enabled = true
 shadow_bias = 0.04
 shadow_normal_bias = 1.2
 shadow_blur = 1.2
-directional_shadow_max_distance = 55.0
+directional_shadow_max_distance = 38.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1449416436]
 environment = SubResource("SummerEnv")

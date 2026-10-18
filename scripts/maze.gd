@@ -29,12 +29,22 @@ var tall_mat: ShaderMaterial
 var lantern_lights: Array[OmniLight3D] = []
 
 
-func build(cfg_: Dictionary) -> void:
-	cfg = cfg_
+## 古い世界を片付ける（生成と同じフレームでやると描画側がエラーを出すので分けて呼べるように）
+func clear_world() -> void:
 	for c in get_children():
+		# 先に消してから破棄する（描画中のライトをいきなり消すとエラーが出る）
+		if c is Node3D:
+			(c as Node3D).visible = false
+		if c is Light3D:
+			(c as Light3D).light_energy = 0.0
 		remove_child(c)
 		c.queue_free()
 	lantern_lights.clear()
+
+
+func build(cfg_: Dictionary) -> void:
+	cfg = cfg_
+	clear_world()
 	young.clear()
 	cells = cfg.cells
 	G = cells * 2 + 1
@@ -499,6 +509,8 @@ func _build_festival() -> void:
 		lmat.roughness = 0.9
 		_make_mm(lm, pair[0], [], lmat, false, pair[2])
 	# 通路沿いの提灯の一部に本物の灯り
+	if "--nolights" in OS.get_cmdline_user_args():
+		return
 	var placed: Array[Vector3] = []
 	var max_lights := 10 if lite else 18
 	for lt in lanterns:

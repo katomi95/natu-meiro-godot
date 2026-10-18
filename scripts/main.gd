@@ -542,6 +542,11 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# F11 で全画面（デスクトップ版）
+	if event is InputEventKey and event.pressed and event.physical_keycode == KEY_F11:
+		var full := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED if full else DisplayServer.WINDOW_MODE_FULLSCREEN)
+		return
 	if state in ["play", "finale"] and event is InputEventMouseButton and event.pressed:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		if hint.visible:
@@ -610,7 +615,9 @@ func _next_stage() -> void:
 	player.locked = true
 	var tw := create_tween()
 	tw.tween_method(func(a): overlay.color = Color(col.r, col.g, col.b, a), 0.0, 1.0, 2.2)
-	tw.tween_interval(0.15)
+	# 片付けと生成を同じフレームでやらない（描画側のエラー対策）
+	tw.tween_callback(maze.clear_world)
+	tw.tween_interval(0.3)
 	tw.tween_callback(func(): _load_stage(to))
 	tw.tween_interval(0.26)
 	tw.tween_method(func(a): overlay.color = Color(col.r, col.g, col.b, a), 1.0, 0.0, 2.6)
